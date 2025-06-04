@@ -16,6 +16,10 @@ const IncisoDisplay = () => {
   const [reconnectDelay, setReconnectDelay] = useState(1000);
   const [sendMessage, setSendMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [sendMode, setSendMode] = useState("dropdown"); // "dropdown" o "freetext"
+  const [selectedNumber, setSelectedNumber] = useState("1");
+  const [selectedLetter, setSelectedLetter] = useState("A");
+  const [displayDuration, setDisplayDuration] = useState(5); // segundos
 
   const reconnectTimeoutRef = useRef(null);
   const incisoTimeoutRef = useRef(null);
@@ -89,7 +93,7 @@ const IncisoDisplay = () => {
         try {
           const data = JSON.parse(event.data);
           if (data.inciso) {
-            receiveInciso(data.inciso);
+            receiveInciso(data.inciso, data.duration);
           }
           if (data.message) {
             console.log("Mensaje del servidor:", data.message);
@@ -140,9 +144,16 @@ const IncisoDisplay = () => {
 
   // Enviar mensaje a través de la API
   const sendMessageToServer = async () => {
-    if (!sendMessage.trim()) {
-      showToast("Por favor ingresa un mensaje", "error");
-      return;
+    let messageToSend = "";
+
+    if (sendMode === "dropdown") {
+      messageToSend = `${selectedNumber} - ${selectedLetter}`;
+    } else {
+      messageToSend = sendMessage.trim();
+      if (!messageToSend) {
+        showToast("Por favor ingresa un mensaje", "error");
+        return;
+      }
     }
 
     setIsSending(true);
@@ -153,12 +164,17 @@ const IncisoDisplay = () => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ inciso: sendMessage.trim() }),
+        body: JSON.stringify({
+          inciso: messageToSend,
+          duration: displayDuration * 1000, // convertir a milisegundos
+        }),
       });
 
       if (response.ok) {
-        showToast("Mensaje enviado exitosamente", "success");
-        setSendMessage("");
+        showToast(`Mensaje enviado: ${messageToSend}`, "success");
+        if (sendMode === "freetext") {
+          setSendMessage("");
+        }
       } else {
         const errorData = await response.text();
         throw new Error(`Error ${response.status}: ${errorData}`);
@@ -199,7 +215,7 @@ const IncisoDisplay = () => {
   }, [eventSource]);
 
   // Mostrar inciso recibido
-  const receiveInciso = (inciso) => {
+  const receiveInciso = (inciso, duration) => {
     // Limpiar timeout anterior si existe
     if (incisoTimeoutRef.current) {
       clearTimeout(incisoTimeoutRef.current);
@@ -208,11 +224,16 @@ const IncisoDisplay = () => {
     setCurrentInciso(inciso);
     setShowInciso(true);
 
-    // Desaparece después de 30 segundos
+    // Usar duración personalizada si se proporciona, sino usar la configurada
+    // Siempre tomar el valor más reciente de displayDuration
+    const timeoutDuration =
+      typeof duration === "number" ? duration : displayDuration * 1000;
+
+    // Desaparece después del tiempo configurado
     incisoTimeoutRef.current = setTimeout(() => {
       setShowInciso(false);
       setCurrentInciso("");
-    }, 30000);
+    }, timeoutDuration);
   };
 
   // Remover toast
@@ -248,7 +269,7 @@ const IncisoDisplay = () => {
       <div className="flex-1 flex items-center justify-center">
         {showInciso ? (
           <div className="text-center">
-            <div className="text-[#222] text-[25rem] font-bold leading-none mb-8 drop-shadow-2xl">
+            <div className="text-[#878686] text-[25rem] font-bold leading-none mb-8 drop-shadow-2xl">
               {currentInciso}
             </div>
           </div>
@@ -323,29 +344,131 @@ const IncisoDisplay = () => {
 
         {/* Panel para enviar mensajes */}
         <div className="border-t border-gray-700 pt-3">
-          <h3 className="text-white text-md mb-2">Enviar Inciso</h3>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              value={sendMessage}
-              onChange={(e) => setSendMessage(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && sendMessageToServer()}
-              placeholder="Escribe el inciso a mostrar..."
-              className="flex-1 bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
-              disabled={isSending}
-            />
-            <button
-              onClick={sendMessageToServer}
-              disabled={isSending || !sendMessage.trim()}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                isSending || !sendMessage.trim()
-                  ? "bg-gray-600 text-gray-400 cursor-not-allowed"
-                  : "bg-blue-600 hover:bg-blue-700 text-white"
-              }`}
-            >
-              {isSending ? "Enviando..." : "Enviar"}
-            </button>
+          <h3 className="text-white text-md mb-3">Enviar Inciso</h3>
+
+          {/* Configuración de tiempo de visualización */}
+          <div className="mb-3 flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-gray-300 text-sm">
+                Tiempo de visualización:
+              </label>
+              <select
+                value={displayDuration}
+                onChange={(e) => setDisplayDuration(Number(e.target.value))}
+                className="bg-gray-700 text-white px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
+              >
+                <option value={1}>1 segundo</option>
+                <option value={2}>2 segundos</option>
+                <option value={3}>3 segundos</option>
+                <option value={5}>5 segundos</option>
+                <option value={10}>10 segundos</option>
+                <option value={15}>15 segundos</option>
+                <option value={20}>20 segundos</option>
+                <option value={25}>25 segundos</option>
+                <option value={30}>30 segundos</option>
+              </select>
+            </div>
           </div>
+
+          {/* Selector de modo de entrada */}
+          <div className="mb-3">
+            <div className="flex gap-4 mb-2">
+              <label className="flex items-center gap-2 text-gray-300 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  value="dropdown"
+                  checked={sendMode === "dropdown"}
+                  onChange={(e) => setSendMode(e.target.value)}
+                  className="text-blue-500"
+                />
+                Número - Letra
+              </label>
+              <label className="flex items-center gap-2 text-gray-300 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  value="freetext"
+                  checked={sendMode === "freetext"}
+                  onChange={(e) => setSendMode(e.target.value)}
+                  className="text-blue-500"
+                />
+                Texto libre
+              </label>
+            </div>
+          </div>
+
+          {/* Inputs según el modo seleccionado */}
+          {sendMode === "dropdown" ? (
+            <div className="flex gap-2 items-center mb-2">
+              <select
+                value={selectedNumber}
+                onChange={(e) => setSelectedNumber(e.target.value)}
+                className="bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
+                disabled={isSending}
+              >
+                {Array.from({ length: 50 }, (_, i) => i + 1).map((num) => (
+                  <option key={num} value={num}>
+                    {num}
+                  </option>
+                ))}
+              </select>
+
+              <span className="text-gray-300 text-lg font-bold">-</span>
+
+              <select
+                value={selectedLetter}
+                onChange={(e) => setSelectedLetter(e.target.value)}
+                className="bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
+                disabled={isSending}
+              >
+                {Array.from({ length: 26 }, (_, i) =>
+                  String.fromCharCode(65 + i)
+                ).map((letter) => (
+                  <option key={letter} value={letter}>
+                    {letter}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex-1 bg-gray-600 px-3 py-2 rounded text-gray-300 text-sm">
+                Vista previa: {selectedNumber} - {selectedLetter}
+              </div>
+
+              <button
+                onClick={sendMessageToServer}
+                disabled={isSending}
+                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                  isSending
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                {isSending ? "Enviando..." : "Enviar"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2 items-center">
+              <input
+                type="text"
+                value={sendMessage}
+                onChange={(e) => setSendMessage(e.target.value)}
+                onKeyPress={(e) => e.key === "Enter" && sendMessageToServer()}
+                placeholder="Escribe el inciso a mostrar..."
+                className="flex-1 bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
+                disabled={isSending}
+              />
+              <button
+                onClick={sendMessageToServer}
+                disabled={isSending || !sendMessage.trim()}
+                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                  isSending || !sendMessage.trim()
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                {isSending ? "Enviando..." : "Enviar"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -353,8 +476,8 @@ const IncisoDisplay = () => {
       <div className="bg-gray-800 p-3 transition-opacity duration-300 opacity-0 hover:opacity-100">
         <div className="text-center mb-2">
           <p className="text-gray-400 text-sm">
-            Los incisos se muestran durante 30 segundos y luego desaparecen
-            automáticamente
+            Los incisos se muestran durante el tiempo configurado y luego
+            desaparecen automáticamente
           </p>
           <p className="text-gray-400 text-xs mt-1">
             Reconexión automática habilitada - La conexión se mantendrá siempre
@@ -368,7 +491,7 @@ const IncisoDisplay = () => {
               Ver ejemplo de servidor Node.js actualizado
             </summary>
             <pre className="mt-2 bg-gray-900 p-3 rounded text-green-400 overflow-x-auto">
-              {`// server.js - Servidor Node.js con reconexión y endpoint /send-inciso
+              {`// server.js - Servidor Node.js con reconexión y endpoint /send
 const express = require('express');
 const cors = require('cors');
 const app = express();
@@ -408,18 +531,18 @@ app.get('/events', (req, res) => {
 
 // Endpoint para enviar incisos
 app.post('/send-inciso', (req, res) => {
-  const { inciso } = req.body;
+  const { inciso, duration } = req.body;
   
   if (!inciso) {
     return res.status(400).json({ error: 'Inciso requerido' });
   }
   
-  console.log(\`Enviando inciso: \${inciso} a \${clients.length} clientes\`);
+  console.log(\`Enviando inciso: \${inciso} (duración: \${duration || 30000}ms) a \${clients.length} clientes\`);
   
   // Enviar a todos los clientes conectados
   clients.forEach(client => {
     try {
-      client.write(\`data: \${JSON.stringify({ inciso })}\\n\\n\`);
+      client.write(\`data: \${JSON.stringify({ inciso, duration })}\\n\\n\`);
     } catch (error) {
       console.error('Error enviando a cliente:', error);
     }
@@ -428,7 +551,8 @@ app.post('/send-inciso', (req, res) => {
   res.json({ 
     success: true, 
     message: \`Inciso enviado a \${clients.length} clientes\`,
-    inciso 
+    inciso,
+    duration: duration || 30000
   });
 });
 
