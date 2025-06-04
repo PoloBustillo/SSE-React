@@ -8,7 +8,7 @@ const IncisoDisplay = () => {
   const [connectionStatus, setConnectionStatus] = useState("Desconectado");
   const [eventSource, setEventSource] = useState(null);
   const [serverUrl, setServerUrl] = useState(
-    "http://146.190.119.145:3001/events"
+    "https://sse.psic-danieladiaz.com/events"
   );
   const [toasts, setToasts] = useState([]);
 
