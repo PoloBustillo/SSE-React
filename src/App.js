@@ -247,8 +247,8 @@ const IncisoDisplay = () => {
       {/* Pantalla principal para mostrar incisos */}
       <div className="flex-1 flex items-center justify-center">
         {showInciso ? (
-          <div className="text-center animate-pulse">
-            <div className="text-[#878686] text-[25rem] font-bold leading-none mb-8 drop-shadow-2xl">
+          <div className="text-center">
+            <div className="text-[#222] text-[25rem] font-bold leading-none mb-8 drop-shadow-2xl">
               {currentInciso}
             </div>
           </div>
