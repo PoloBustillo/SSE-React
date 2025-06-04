@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 const IncisoDisplay = () => {
   const [currentInciso, setCurrentInciso] = useState("");
@@ -11,6 +11,14 @@ const IncisoDisplay = () => {
     "https://sse.psic-danieladiaz.com/events"
   );
   const [toasts, setToasts] = useState([]);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [maxReconnectAttempts] = useState(10);
+  const [reconnectDelay, setReconnectDelay] = useState(1000);
+  const [sendMessage, setSendMessage] = useState("");
+  const [isSending, setIsSending] = useState(false);
+
+  const reconnectTimeoutRef = useRef(null);
+  const incisoTimeoutRef = useRef(null);
 
   // Función para mostrar toast
   const showToast = (message, type = "error") => {
@@ -24,19 +32,57 @@ const IncisoDisplay = () => {
     }, 5000);
   };
 
-  // Conectar a SSE
+  // Función de reconexión automática
+  const scheduleReconnect = () => {
+    if (reconnectAttempts >= maxReconnectAttempts) {
+      setConnectionStatus("Reconexión fallida - Máximo de intentos alcanzado");
+      showToast("No se pudo reconectar después de múltiples intentos", "error");
+      return;
+    }
+
+    // Limpiar timeout anterior si existe
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+
+    const delay = Math.min(
+      reconnectDelay * Math.pow(2, reconnectAttempts),
+      30000
+    ); // Exponential backoff, max 30s
+    setConnectionStatus(
+      `Reconectando en ${Math.ceil(delay / 1000)}s... (${
+        reconnectAttempts + 1
+      }/${maxReconnectAttempts})`
+    );
+
+    reconnectTimeoutRef.current = setTimeout(() => {
+      setReconnectAttempts((prev) => prev + 1);
+      connectToSSE();
+    }, delay);
+  };
+
+  // Conectar a SSE con reconexión automática
   const connectToSSE = () => {
     if (eventSource) {
       eventSource.close();
     }
 
+    // Limpiar timeout de reconexión si existe
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+
     try {
+      setConnectionStatus("Conectando...");
       const newEventSource = new EventSource(serverUrl);
 
       newEventSource.onopen = () => {
         setIsConnected(true);
         setConnectionStatus("Conectado");
+        setReconnectAttempts(0); // Reset contador de reconexión
+        setReconnectDelay(1000); // Reset delay de reconexión
         console.log("Conectado a SSE");
+        showToast("Conectado exitosamente", "success");
       };
 
       newEventSource.onmessage = (event) => {
@@ -45,35 +91,83 @@ const IncisoDisplay = () => {
           if (data.inciso) {
             receiveInciso(data.inciso);
           }
+          if (data.message) {
+            console.log("Mensaje del servidor:", data.message);
+          }
         } catch (error) {
           console.error("Error al parsear datos SSE:", error);
         }
       };
 
       newEventSource.onerror = (error) => {
-        setIsConnected(false);
-        setConnectionStatus("Error de conexión");
         console.error("Error SSE:", error);
-        showToast(
-          `Error de conexión SSE: ${error.message || "Conexión fallida"}`
-        );
+        setIsConnected(false);
+
+        // Solo intentar reconectar si no fue una desconexión manual
+        if (newEventSource.readyState !== EventSource.CLOSED) {
+          setConnectionStatus("Error de conexión - Reintentando...");
+          scheduleReconnect();
+        } else {
+          setConnectionStatus("Desconectado");
+        }
       };
 
       setEventSource(newEventSource);
     } catch (error) {
       setConnectionStatus("Error al conectar");
       console.error("Error al crear EventSource:", error);
-      showToast(`Error al conectar: ${error.message}`);
+      showToast(`Error al conectar: ${error.message}`, "error");
+      scheduleReconnect();
     }
   };
 
   // Desconectar SSE
   const disconnectSSE = () => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+
     if (eventSource) {
       eventSource.close();
       setEventSource(null);
-      setIsConnected(false);
-      setConnectionStatus("Desconectado");
+    }
+
+    setIsConnected(false);
+    setConnectionStatus("Desconectado");
+    setReconnectAttempts(0);
+    showToast("Desconectado manualmente", "success");
+  };
+
+  // Enviar mensaje a través de la API
+  const sendMessageToServer = async () => {
+    if (!sendMessage.trim()) {
+      showToast("Por favor ingresa un mensaje", "error");
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      const baseUrl = serverUrl.replace("/events", "");
+      const response = await fetch(`${baseUrl}/send-inciso`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ inciso: sendMessage.trim() }),
+      });
+
+      if (response.ok) {
+        showToast("Mensaje enviado exitosamente", "success");
+        setSendMessage("");
+      } else {
+        const errorData = await response.text();
+        throw new Error(`Error ${response.status}: ${errorData}`);
+      }
+    } catch (error) {
+      console.error("Error al enviar mensaje:", error);
+      showToast(`Error al enviar: ${error.message}`, "error");
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -85,6 +179,12 @@ const IncisoDisplay = () => {
     return () => {
       if (eventSource) {
         eventSource.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (incisoTimeoutRef.current) {
+        clearTimeout(incisoTimeoutRef.current);
       }
     };
   }, []);
@@ -100,11 +200,16 @@ const IncisoDisplay = () => {
 
   // Mostrar inciso recibido
   const receiveInciso = (inciso) => {
+    // Limpiar timeout anterior si existe
+    if (incisoTimeoutRef.current) {
+      clearTimeout(incisoTimeoutRef.current);
+    }
+
     setCurrentInciso(inciso);
     setShowInciso(true);
 
     // Desaparece después de 30 segundos
-    setTimeout(() => {
+    incisoTimeoutRef.current = setTimeout(() => {
       setShowInciso(false);
       setCurrentInciso("");
     }, 30000);
@@ -155,15 +260,13 @@ const IncisoDisplay = () => {
         )}
       </div>
 
-      {/* Panel de configuración SSE - Solo visible cuando hay inciso o se hace hover */}
-      <div
-        className={
-          "bg-gray-800 p-4 border-t border-gray-700 transition-opacity duration-300 opacity-0 hover:opacity-100"
-        }
-      >
+      {/* Panel de configuración SSE - Solo visible cuando se hace hover */}
+      <div className="bg-gray-800 p-4 border-t border-gray-700 transition-opacity duration-300 opacity-0 hover:opacity-100">
         <h2 className="text-white text-lg mb-3">
           Configuración Server-Sent Events
         </h2>
+
+        {/* Configuración de conexión */}
         <div className="flex flex-wrap items-center gap-4 mb-3">
           <div className="flex items-center gap-2">
             <label className="text-gray-300 text-sm">URL del servidor:</label>
@@ -172,7 +275,7 @@ const IncisoDisplay = () => {
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
               className="bg-gray-700 text-white px-3 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
-              placeholder="http://localhost:3001/events"
+              placeholder="https://sse.psic-danieladiaz.com/events"
             />
           </div>
           <div className="flex gap-2">
@@ -200,7 +303,9 @@ const IncisoDisplay = () => {
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Estado de conexión */}
+        <div className="flex items-center gap-2 mb-4">
           <div
             className={`w-3 h-3 rounded-full ${
               isConnected ? "bg-green-500" : "bg-red-500"
@@ -209,29 +314,61 @@ const IncisoDisplay = () => {
           <span className="text-gray-300 text-sm">
             Estado: {connectionStatus}
           </span>
+          {reconnectAttempts > 0 && (
+            <span className="text-yellow-400 text-xs">
+              (Intento {reconnectAttempts}/{maxReconnectAttempts})
+            </span>
+          )}
+        </div>
+
+        {/* Panel para enviar mensajes */}
+        <div className="border-t border-gray-700 pt-3">
+          <h3 className="text-white text-md mb-2">Enviar Inciso</h3>
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              value={sendMessage}
+              onChange={(e) => setSendMessage(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && sendMessageToServer()}
+              placeholder="Escribe el inciso a mostrar..."
+              className="flex-1 bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none text-sm"
+              disabled={isSending}
+            />
+            <button
+              onClick={sendMessageToServer}
+              disabled={isSending || !sendMessage.trim()}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                isSending || !sendMessage.trim()
+                  ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700 text-white"
+              }`}
+            >
+              {isSending ? "Enviando..." : "Enviar"}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Información adicional */}
-      <div
-        className={
-          "bg-gray-800 p-3 transition-opacity duration-300 opacity-0 hover:opacity-100"
-        }
-      >
+      <div className="bg-gray-800 p-3 transition-opacity duration-300 opacity-0 hover:opacity-100">
         <div className="text-center mb-2">
           <p className="text-gray-400 text-sm">
             Los incisos se muestran durante 30 segundos y luego desaparecen
             automáticamente
+          </p>
+          <p className="text-gray-400 text-xs mt-1">
+            Reconexión automática habilitada - La conexión se mantendrá siempre
+            activa
           </p>
         </div>
 
         <div className="mt-3 text-xs text-gray-500">
           <details>
             <summary className="cursor-pointer hover:text-gray-400">
-              Ver ejemplo de servidor Node.js
+              Ver ejemplo de servidor Node.js actualizado
             </summary>
             <pre className="mt-2 bg-gray-900 p-3 rounded text-green-400 overflow-x-auto">
-              {`// server.js - Servidor Node.js de ejemplo
+              {`// server.js - Servidor Node.js con reconexión y endpoint /send-inciso
 const express = require('express');
 const cors = require('cors');
 const app = express();
@@ -239,30 +376,67 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+let clients = [];
+
 // Endpoint SSE
 app.get('/events', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
   });
   
-  res.write('data: {"message": "Conectado"}\\n\\n');
+  // Agregar cliente a la lista
+  clients.push(res);
+  console.log(\`Cliente conectado. Total: \${clients.length}\`);
+  
+  // Enviar mensaje de bienvenida
+  res.write('data: {"message": "Conectado exitosamente"}\\n\\n');
+  
+  // Mantener conexión viva
+  const heartbeat = setInterval(() => {
+    res.write('data: {"heartbeat": true}\\n\\n');
+  }, 30000);
   
   req.on('close', () => {
-    console.log('Cliente desconectado');
+    clearInterval(heartbeat);
+    clients = clients.filter(client => client !== res);
+    console.log(\`Cliente desconectado. Total: \${clients.length}\`);
   });
 });
 
 // Endpoint para enviar incisos
 app.post('/send-inciso', (req, res) => {
   const { inciso } = req.body;
-  // Aquí enviarías a todos los clientes conectados
-  res.json({ success: true });
+  
+  if (!inciso) {
+    return res.status(400).json({ error: 'Inciso requerido' });
+  }
+  
+  console.log(\`Enviando inciso: \${inciso} a \${clients.length} clientes\`);
+  
+  // Enviar a todos los clientes conectados
+  clients.forEach(client => {
+    try {
+      client.write(\`data: \${JSON.stringify({ inciso })}\\n\\n\`);
+    } catch (error) {
+      console.error('Error enviando a cliente:', error);
+    }
+  });
+  
+  res.json({ 
+    success: true, 
+    message: \`Inciso enviado a \${clients.length} clientes\`,
+    inciso 
+  });
 });
 
 app.listen(3001, () => {
   console.log('Servidor SSE en puerto 3001');
+  console.log('Endpoints disponibles:');
+  console.log('- GET /events (SSE)');
+  console.log('- POST /send-inciso (Enviar incisos)');
 });`}
             </pre>
           </details>
