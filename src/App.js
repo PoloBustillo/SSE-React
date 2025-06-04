@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from "react";
 
 const IncisoDisplay = () => {
@@ -86,7 +87,7 @@ const IncisoDisplay = () => {
         eventSource.close();
       }
     };
-  }, []);
+  }, [eventSource]);
 
   // Limpiar al cambiar eventSource
   useEffect(() => {
