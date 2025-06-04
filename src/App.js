@@ -87,7 +87,7 @@ const IncisoDisplay = () => {
         eventSource.close();
       }
     };
-  }, [eventSource]);
+  }, []);
 
   // Limpiar al cambiar eventSource
   useEffect(() => {
